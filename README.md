@@ -27,3 +27,35 @@ docs/
 
 data/
   README.md
+```
+Data and code availability
+The source code is provided in this repository.
+The input station data, benchmark grids, DEM, and generated NetCDF products are not stored in this repository because of size and licensing constraints. They are archived at:
+
+DOI: [to be added]
+
+Repository: [Zenodo/figshare to be added]
+
+Installation
+```text
+conda create -n precipi python=3.10
+conda activate precipi
+pip install -r requirements.txt
+```
+Usage
+Place the input files in data/input/ and benchmark data in data/benchmark/.
+Then run the scripts in order from src/.
+
+Example:
+```text
+python src/01_occurrence_calibration.py
+python src/02_magnitude_calibration_I2.py
+python src/03_magnitude_calibration_I3.py
+python src/04_occurrence_reconstruction.py
+python src/05_magnitude_reconstruction_I2.py
+python src/06_magnitude_reconstruction_I3.py
+python src/07_conditioning_I2_binarization.py
+python src/08_bias_correction_I2.py
+python src/09_bias_correction_I3.py
+```
+
