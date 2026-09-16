@@ -221,4 +221,700 @@ def _translate_gstools_to_pykrige(model_params: Dict) -> Tuple[str, list]:
         variogram_parameters = [
             model_params["nugget"],
             model_params["range"],
-            model
+            model_params["sill"]
+        ]
+        return "linear", variogram_parameters
+
+def adaptive_transformation(data: np.ndarray) -> QuantileTransformer:
+    transformer = QuantileTransformer(
+        output_distribution='normal',
+        n_quantiles=min(10000, len(data)),
+        random_state=42,
+        subsample=min(20000, len(data))
+    )
+    data_2d = data.reshape(-1, 1)
+    transformer.fit(data_2d)
+    return transformer
+
+def transform_variance_to_original_space(
+    transformer: QuantileTransformer,
+    z_pred_trans: np.ndarray,
+    z_var_trans: np.ndarray,
+    method: str = 'delta'
+) -> np.ndarray:
+    if method == 'delta':
+        z_pred_flat = z_pred_trans.flatten()
+        z_var_flat = z_var_trans.flatten()
+        z_var_orig = np.full_like(z_pred_flat, np.nan)
+        valid_mask = ~np.isnan(z_pred_flat) & ~np.isnan(z_var_flat)
+        z_pred_valid = z_pred_flat[valid_mask]
+        z_var_valid = z_var_flat[valid_mask]
+        if len(z_pred_valid) == 0:
+            return np.full_like(z_pred_trans, np.nan)
+        epsilon = 1e-4
+        z_pred_plus = z_pred_valid + epsilon
+        z_pred_minus = z_pred_valid - epsilon
+        z_orig_plus = transformer.inverse_transform(z_pred_plus.reshape(-1, 1)).flatten()
+        z_orig_minus = transformer.inverse_transform(z_pred_minus.reshape(-1, 1)).flatten()
+        jacobian = (z_orig_plus - z_orig_minus) / (2 * epsilon)
+        z_var_orig_valid = (jacobian ** 2) * z_var_valid
+        z_var_orig[valid_mask] = z_var_orig_valid
+        return z_var_orig.reshape(z_pred_trans.shape)
+    elif method == 'monte_carlo':
+        n_samples = 100
+        z_pred_flat = z_pred_trans.flatten()
+        z_var_flat = z_var_trans.flatten()
+        valid_mask = ~np.isnan(z_pred_flat) & ~np.isnan(z_var_flat)
+        z_pred_valid = z_pred_flat[valid_mask]
+        z_var_valid = z_var_flat[valid_mask]
+        if len(z_pred_valid) == 0:
+            return np.full_like(z_pred_trans, np.nan)
+        samples_orig = np.zeros((len(z_pred_valid), n_samples))
+        for i in range(n_samples):
+            samples_trans = np.random.normal(z_pred_valid, np.sqrt(z_var_valid))
+            samples_orig[:, i] = transformer.inverse_transform(
+                samples_trans.reshape(-1, 1)
+            ).flatten()
+        z_var_orig_valid = np.var(samples_orig, axis=1)
+        z_var_orig = np.full_like(z_pred_flat, np.nan)
+        z_var_orig[valid_mask] = z_var_orig_valid
+        return z_var_orig.reshape(z_pred_trans.shape)
+    else:
+        raise ValueError(f"Unknown method: {method}")
+
+def conditional_kriging_magnitude_ok(
+    day: date,
+    day_data: pd.DataFrame,
+    transformer: QuantileTransformer,
+    model_params: Dict,
+    grid_x: np.ndarray,
+    grid_y: np.ndarray,
+    land_mask: np.ndarray,
+    min_stations: int = 4,
+    min_wet_data: int = 3
+) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    result_grid = np.full((len(grid_y), len(grid_x)), np.nan, dtype=np.float32)
+    variance_grid = np.full((len(grid_y), len(grid_x)), np.nan, dtype=np.float32)
+    land_cells = land_mask
+    sub = day_data[day_data['Rain'] >= 0].copy()
+    if len(day_data) < min_stations:
+        return result_grid, variance_grid
+    if len(sub) < min_wet_data:
+        print(f"  ⚠ Day {day}: Only {len(sub)} wet stations - using direct assignment")
+        result_grid[land_cells] = 0
+        variance_grid[land_cells] = 0
+        XX, YY = np.meshgrid(grid_x, grid_y, indexing='xy')
+        for _, station in sub.iterrows():
+            distances = np.sqrt((XX - station['Longitude'])**2 +
+                              (YY - station['Latitude'])**2)
+            min_idx = np.unravel_index(np.argmin(distances), distances.shape)
+            if land_mask[min_idx]:
+                result_grid[min_idx] = station['Rain']
+                variance_grid[min_idx] = 0
+        return result_grid, variance_grid
+    try:
+        x_vals = sub['Longitude'].values
+        y_vals = sub['Latitude'].values
+        z_vals_raw = sub['Rain'].values
+        z_vals_trans = transformer.transform(z_vals_raw.reshape(-1, 1)).flatten()
+        model_name, variogram_parameters = _translate_gstools_to_pykrige(model_params)
+        variogram_function = None
+        if model_name == "custom":
+            variogram_function = _matern_variogram_function
+        OK = OrdinaryKriging(
+            x=x_vals,
+            y=y_vals,
+            z=z_vals_trans,
+            variogram_model=model_name,
+            variogram_parameters=variogram_parameters,
+            variogram_function=variogram_function,
+            exact_values=True,
+            pseudo_inv=True,
+            verbose=False,
+            enable_plotting=False
+        )
+        z_pred_trans, z_var_trans = OK.execute('masked', xpoints=grid_x, ypoints=grid_y, mask=~land_cells)
+        valid_mask = ~np.isnan(z_pred_trans)
+        if np.any(valid_mask):
+            z_pred_back = transformer.inverse_transform(
+                z_pred_trans[valid_mask].reshape(-1, 1)
+            ).flatten()
+            z_pred_back[z_pred_back < 0] = 0
+            z_var_orig = transform_variance_to_original_space(
+                transformer,
+                z_pred_trans,
+                z_var_trans,
+                method='monte_carlo'
+            )
+            temp_pred = np.full_like(z_pred_trans, np.nan)
+            temp_var = np.full_like(z_var_trans, np.nan)
+            temp_pred[valid_mask] = z_pred_back
+            temp_var[valid_mask] = z_var_orig[valid_mask]
+            result_grid[land_cells] = temp_pred[land_cells]
+            variance_grid[land_cells] = temp_var[land_cells]
+        return result_grid, variance_grid
+    except Exception as e:
+        warnings.warn(f"Kriging failed for {day}: {str(e)}")
+        return None, None
+
+def compute_im_product(magnitude_map: np.ndarray, prob_map: np.ndarray) -> np.ndarray:
+    return magnitude_map * prob_map
+
+class CheckpointSystem:
+    def __init__(self, config: Config, logger: logging.Logger):
+        self.config = config
+        self.logger = logger
+        self.checkpoint_file = config.base_dir / "checkpoints" / "magnitude_reconstruction_checkpoint.json"
+        self.checkpoint_file.parent.mkdir(exist_ok=True)
+
+    def save_checkpoint(
+        self,
+        current_date: date,
+        current_month: str,
+        completed_dates: List[date],
+        category_results: Dict[str, List[date]],
+        metadata: Dict
+    ):
+        checkpoint_data = {
+            'current_date': current_date.isoformat(),
+            'current_month': current_month,
+            'completed_dates': [d.isoformat() for d in completed_dates],
+            'category_results': {
+                cls: [d.isoformat() for d in dates]
+                for cls, dates in category_results.items()
+            },
+            'metadata': metadata,
+            'timestamp': datetime.now().isoformat(),
+            'config': {
+                'trace_threshold': self.config.trace_threshold,
+                'min_stations': self.config.min_stations_threshold
+            }
+        }
+        try:
+            with open(self.checkpoint_file, 'w') as f:
+                json.dump(checkpoint_data, f, indent=2)
+            self.logger.info(f"Checkpoint saved: {current_date}, month: {current_month}")
+        except Exception as e:
+            self.logger.error(f"Failed to save checkpoint: {e}")
+
+    def load_checkpoint(self) -> Optional[Dict]:
+        if not self.checkpoint_file.exists():
+            return None
+        try:
+            with open(self.checkpoint_file, 'r') as f:
+                data = json.load(f)
+            data['current_date'] = date.fromisoformat(data['current_date'])
+            data['completed_dates'] = [date.fromisoformat(d) for d in data['completed_dates']]
+            data['category_results'] = {
+                cls: [date.fromisoformat(d) for d in dates]
+                for cls, dates in data['category_results'].items()
+            }
+            self.logger.info(f"Checkpoint loaded: {data['current_date']}, month: {data.get('current_month', 'N/A')}")
+            self.logger.info(f"Already completed: {len(data['completed_dates'])} days")
+            return data
+        except Exception as e:
+            self.logger.error(f"Failed to load checkpoint: {e}")
+            return None
+
+    def clear_checkpoint(self):
+        if self.checkpoint_file.exists():
+            self.checkpoint_file.unlink()
+            self.logger.info("Checkpoint cleared")
+
+class OutputHandler:
+    def __init__(self, config: Config, logger: logging.Logger):
+        self.config = config
+        self.logger = logger
+
+    def save_monthly_data(
+        self,
+        year_month: str,
+        dates: List[date],
+        magnitude_maps: List[np.ndarray],
+        uncertainty_maps: List[np.ndarray],
+        im_product_maps: List[np.ndarray],
+        grid_x: np.ndarray,
+        grid_y: np.ndarray,
+        land_mask: np.ndarray,
+        overwrite: bool = False
+    ) -> Tuple[Path, Path]:
+        ds = xr.Dataset(
+            {
+                "rainfall_magnitude": (("time", "y", "x"), np.array(magnitude_maps, dtype=np.float32)),
+                "kriging_variance": (("time", "y", "x"), np.array(uncertainty_maps, dtype=np.float32)),
+                "IM_product": (("time", "y", "x"), np.array(im_product_maps, dtype=np.float32)),
+                "land_mask": (("y", "x"), land_mask.astype(np.int8))
+            },
+            coords={
+                "time": pd.to_datetime(dates),
+                "x": grid_x,
+                "y": grid_y
+            }
+        )
+        ds.x.attrs = {"units": "meters", "crs": "EPSG:32633"}
+        ds.y.attrs = {"units": "meters", "crs": "EPSG:32633"}
+        ds.time.attrs = {"long_name": "Time"}
+        ds.rainfall_magnitude.attrs = {
+            "units": "mm",
+            "long_name": "Rainfall magnitude",
+            "description": "Conditional kriging magnitude from historical reconstruction",
+            "valid_range": [0.0, 1000.0]
+        }
+        ds.kriging_variance.attrs = {
+            "units": "mm²",
+            "long_name": "Kriging variance (transformed space)",
+            "description": "Kriging variance in transformed space",
+            "valid_range": [0.0, 1e6]
+        }
+        ds.IM_product.attrs = {
+            "units": "mm",
+            "long_name": "Magnitude multiplied by Occurrence",
+            "description": "Rainfall Magnitude as a Product of Occurrence Probability",
+            "valid_range": [0.0, 1000.0]
+        }
+        ds.land_mask.attrs = {
+            "units": "binary",
+            "long_name": "Land mask",
+            "description": "1 for land, 0 for sea",
+            "valid_range": [0, 1]
+        }
+        ds.attrs = {
+            "title": f"Historical Rainfall Magnitude Reconstruction - Sicily {year_month}",
+            "institution": "UNIPA",
+            "source": "Historical gauge observations (1951-2022)",
+            "history": f"Created {datetime.now():%Y-%m-%d %H:%M:%S}",
+            "conventions": "CF-1.8",
+            "reference": "Conditional two-phase rainfall modeling approach",
+            "corresponding_data_producer": "Niloufar Beikahmadi",
+            "contact": "Niloufar.beikahmadi@gmail.com",
+            "github": "https://github.com/Niloufarbeikahmadi",
+            "version": "1.0",
+            "calendar": "standard",
+            "year_month": year_month,
+            "start_date": dates[0].isoformat() if dates else "",
+            "end_date": dates[-1].isoformat() if dates else "",
+            "n_days": len(dates),
+            "model_used": "Ordinary Kriging with Matern variogram",
+            "trace_threshold": f"{self.config.trace_threshold} mm",
+            "min_stations_threshold": self.config.min_stations_threshold
+        }
+        magnitude_file = (
+            self.config.base_dir /
+            "Phase_II" /
+            "Magnitude_Grids" /
+            f"rainfall_magnitude_{year_month}.nc"
+        )
+        uncertainty_file = (
+            self.config.base_dir /
+            "Phase_II" /
+            "Uncertainty_Grids" /
+            f"kriging_variance_{year_month}.nc"
+        )
+        encoding = {
+            'rainfall_magnitude': {
+                'zlib': True,
+                'complevel': self.config.compression_level,
+                'dtype': 'float32',
+                '_FillValue': -9999.0
+            },
+            'kriging_variance': {
+                'zlib': True,
+                'complevel': self.config.compression_level,
+                'dtype': 'float32',
+                '_FillValue': -9999.0
+            },
+            'IM_product': {
+                'zlib': True,
+                'complevel': self.config.compression_level,
+                'dtype': 'float32',
+                '_FillValue': -9999.0
+            },
+            'land_mask': {
+                'zlib': True,
+                'complevel': self.config.compression_level,
+                'dtype': 'int8',
+                '_FillValue': -99
+            }
+        }
+        ds.time.encoding = {
+            'units': 'days since 1950-01-01 00:00:00',
+            'calendar': 'standard'
+        }
+        ds[['rainfall_magnitude', 'land_mask']].to_netcdf(
+            magnitude_file,
+            encoding={
+                'rainfall_magnitude': encoding['rainfall_magnitude'],
+                'land_mask': encoding['land_mask']
+            }
+        )
+        ds[['kriging_variance', 'land_mask']].to_netcdf(
+            uncertainty_file,
+            encoding={
+                'kriging_variance': encoding['kriging_variance'],
+                'land_mask': encoding['land_mask']
+            }
+        )
+        im_product_file = (
+            self.config.base_dir /
+            "Phase_II" /
+            "IM_Product_Grids" /
+            f"im_product_{year_month}.nc"
+        )
+        im_product_file.parent.mkdir(parents=True, exist_ok=True)
+        ds[['IM_product', 'land_mask']].to_netcdf(
+            im_product_file,
+            encoding={
+                'IM_product': encoding['IM_product'],
+                'land_mask': encoding['land_mask']
+            }
+        )
+        self.logger.info(f"Saved monthly files for {year_month}: {magnitude_file.name}, {uncertainty_file.name}, {im_product_file.name}")
+        return magnitude_file, uncertainty_file, im_product_file
+
+    def save_metadata(
+        self,
+        processing_info: Dict,
+        model_metadata: Dict,
+        quality_flags: Dict
+    ):
+        metadata_file = self.config.base_dir / "Phase_II" / "Metadata" / "magnitude_reconstruction_metadata.json"
+        metadata = {
+            "processing_info": processing_info,
+            "model_metadata": model_metadata,
+            "quality_flags": quality_flags,
+            "created": datetime.now().isoformat(),
+            "config": {
+                "trace_threshold": float(self.config.trace_threshold),
+                "min_stations_threshold": int(self.config.min_stations_threshold),
+                "min_wet_stations_threshold": int(self.config.min_wet_stations_threshold)
+            }
+        }
+        with open(metadata_file, 'w') as f:
+            json.dump(metadata, f, indent=2, default=str)
+        self.logger.info(f"Metadata saved: {metadata_file}")
+
+class TransformerManager:
+    def __init__(self, config: Config, logger: logging.Logger):
+        self.config = config
+        self.logger = logger
+        self.transformers_dir = config.base_dir / "transformers"
+        self.transformers_dir.mkdir(exist_ok=True)
+
+    def save_transformer(self, category: str, transformer: QuantileTransformer):
+        transformer_file = self.transformers_dir / f"transformer_{category.replace('/', '_')}.pkl"
+        try:
+            with open(transformer_file, 'wb') as f:
+                pickle.dump(transformer, f)
+            self.logger.info(f"Saved transformer for {category}")
+        except Exception as e:
+            self.logger.error(f"Failed to save transformer for {category}: {e}")
+
+    def load_transformer(self, category: str) -> Optional[QuantileTransformer]:
+        transformer_file = self.transformers_dir / f"transformer_{category.replace('/', '_')}.pkl"
+        if not transformer_file.exists():
+            self.logger.warning(f"Transformer file not found for {category}: {transformer_file}")
+            return None
+        try:
+            with open(transformer_file, 'rb') as f:
+                transformer = pickle.load(f)
+            self.logger.info(f"Loaded transformer for {category}")
+            return transformer
+        except Exception as e:
+            self.logger.error(f"Failed to load transformer for {category}: {e}")
+            return None
+
+    def create_and_save_transformer(self, category: str, data: pd.DataFrame) -> Optional[QuantileTransformer]:
+        wet_data = data[data['Rain'] >= 0]['Rain'].values
+        if len(wet_data) < 10:
+            self.logger.warning(f"Insufficient wet data for {category} ({len(wet_data)} points). Using identity transformation.")
+        else:
+            transformer = adaptive_transformation(wet_data)
+        self.save_transformer(category, transformer)
+        return transformer
+
+class HistoricalMagnitudeReconstructionPipeline:
+    def __init__(self, config: Config):
+        self.config = config
+        self.logger = setup_logging(config)
+        self.data_loader = HistoricalDataLoader(config, self.logger)
+        self.checkpoint = CheckpointSystem(config, self.logger)
+        self.output_handler = OutputHandler(config, self.logger)
+        self.transformer_manager = TransformerManager(config, self.logger)
+        self.daily_df = None
+        self.class_dict = None
+        self.variogram_params = None
+        self.dem = None
+        self.grid_x = None
+        self.grid_y = None
+        self.land_mask = None
+        self.transformers = {}
+        self.processed_dates = []
+        self.failed_dates = []
+        self.current_month = None
+        self.current_month_dates = []
+        self.current_month_magnitude_maps = []
+        self.current_month_uncertainty_maps = []
+        self.current_month_im_product_maps = []
+
+    def load_all_data(self):
+        try:
+            historical_data = self.data_loader.load_historical_data()
+            metadata = self.data_loader.load_metadata()
+            merged_data = self.data_loader.merge_data_metadata(historical_data, metadata)
+            self.daily_df = self.data_loader.create_daily_dataframe(merged_data)
+            self.class_dict = self.data_loader.load_classification()
+            self.variogram_params = self.data_loader.load_variogram_parameters()
+            self.dem = self.data_loader.load_dem()
+            self.grid_x = self.dem.x.values
+            self.grid_y = self.dem.y.values
+            self.land_mask = (~np.isnan(self.dem['dem'].values)).astype(bool)
+            self.logger.info("All data loaded successfully")
+        except Exception as e:
+            self.logger.error(f"Failed to load data: {e}")
+            raise
+
+    def prepare_transformers(self):
+        self.logger.info("Preparing transformers for each category...")
+        for category, dates in self.class_dict.items():
+            if not dates:
+                continue
+            transformer = self.transformer_manager.load_transformer(category)
+            if transformer is None:
+                self.logger.info(f"Creating transformer for {category}...")
+                cat_data = self.daily_df[self.daily_df['day'].isin(dates)].copy()
+                if len(cat_data) > 0:
+                    transformer = self.transformer_manager.create_and_save_transformer(category, cat_data)
+            if transformer is not None:
+                self.transformers[category] = transformer
+                self.logger.info(f"Transformer ready for {category}")
+            else:
+                self.logger.warning(f"Could not prepare transformer for {category}")
+        self.logger.info(f"Prepared transformers for {len(self.transformers)} categories")
+
+    def process_day(self, day: date, prob_map: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray]]:
+        day_data = self.daily_df[self.daily_df['day'] == day].copy()
+        if len(day_data) < self.config.min_stations_threshold:
+            self.logger.warning(f"Insufficient stations for {day}: {len(day_data)}")
+            self.failed_dates.append(day)
+            return None, None, None
+        day_category = None
+        for category, dates in self.class_dict.items():
+            if day in dates:
+                day_category = category
+                break
+        if not day_category or day_category not in self.variogram_params:
+            self.logger.warning(f"No model found for {day}, category: {day_category}")
+            self.failed_dates.append(day)
+            return None, None, None
+        if day_category not in self.transformers:
+            self.logger.warning(f"No transformer found for {day}, category: {day_category}")
+            self.failed_dates.append(day)
+            return None, None, None
+        model_params = self.variogram_params[day_category]
+        transformer = self.transformers[day_category]
+        magnitude_map, uncertainty_map = conditional_kriging_magnitude_ok(
+            day=day,
+            day_data=day_data,
+            transformer=transformer,
+            model_params=model_params,
+            grid_x=self.grid_x,
+            grid_y=self.grid_y,
+            land_mask=self.land_mask,
+            min_stations=self.config.min_stations_threshold,
+            min_wet_data=self.config.min_wet_stations_threshold
+        )
+        if magnitude_map is None or uncertainty_map is None:
+            self.logger.warning(f"Kriging failed for {day}")
+            self.failed_dates.append(day)
+            return None, None, None
+        im_product_map = compute_im_product(magnitude_map, prob_map)
+        wet_cells = np.sum(~np.isnan(magnitude_map))
+        max_rain = np.nanmax(magnitude_map) if wet_cells > 0 else 0
+        self.logger.info(f"Processed {day} ({day_category}): "
+                        f"{wet_cells} wet cells, max rain: {max_rain:.1f} mm")
+        return magnitude_map, uncertainty_map, im_product_map
+
+    def save_current_month(self):
+        if not self.current_month_dates:
+            return
+        try:
+            year_month = self.current_month.strftime("%Y-%m")
+            self.output_handler.save_monthly_data(
+                year_month=year_month,
+                dates=self.current_month_dates,
+                magnitude_maps=self.current_month_magnitude_maps,
+                uncertainty_maps=self.current_month_uncertainty_maps,
+                im_product_maps=self.current_month_im_product_maps,
+                grid_x=self.grid_x,
+                grid_y=self.grid_y,
+                land_mask=self.land_mask.astype(np.int8),
+                overwrite=True
+            )
+            self.logger.info(f"Saved month {year_month}: {len(self.current_month_dates)} days")
+            self.current_month_dates = []
+            self.current_month_magnitude_maps = []
+            self.current_month_uncertainty_maps = []
+            self.current_month_im_product_maps = []
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to save month {self.current_month}: {e}")
+            self.logger.error(traceback.format_exc())
+            return False
+
+    def process_monthly(self):
+        all_dates = []
+        for dates in self.class_dict.values():
+            all_dates.extend(dates)
+        all_dates = sorted(set(all_dates))
+        monthly_groups = {}
+        for day in all_dates:
+            month_key = day.strftime("%Y-%m")
+            if month_key not in monthly_groups:
+                monthly_groups[month_key] = []
+            monthly_groups[month_key].append(day)
+        processed_months = set()
+        for month_key in sorted(monthly_groups.keys()):
+            month_dates = monthly_groups[month_key]
+            year, month = map(int, month_key.split('-'))
+            self.current_month = date(year, month, 1)
+            if month_key in processed_months:
+                continue
+            self.logger.info(f"Processing month: {month_key} ({len(month_dates)} days)")
+            prob_ds = self.data_loader.load_occurrence_probability_maps(month_key)
+            if prob_ds is None:
+                self.logger.error(f"Cannot load probability maps for {month_key}. Skipping month.")
+                continue
+            for day in tqdm(month_dates, desc=f"Processing {month_key}"):
+                if day in self.processed_dates:
+                    continue
+                try:
+                    day_str = day.strftime("%Y-%m-%d")
+                    prob_map = prob_ds['prob_map'].sel(time=day_str).values
+                    magnitude_map, uncertainty_map, im_product_map = self.process_day(day, prob_map)
+                    if magnitude_map is not None and uncertainty_map is not None and im_product_map is not None:
+                        self.current_month_dates.append(day)
+                        self.current_month_magnitude_maps.append(magnitude_map)
+                        self.current_month_uncertainty_maps.append(uncertainty_map)
+                        self.current_month_im_product_maps.append(im_product_map)
+                        self.processed_dates.append(day)
+                    if len(self.processed_dates) % self.config.checkpoint_interval == 0:
+                        self.save_checkpoint(day)
+                except Exception as e:
+                    self.logger.error(f"Error processing {day}: {e}")
+                    self.logger.error(traceback.format_exc())
+                    self.failed_dates.append(day)
+            if self.current_month_dates:
+                if self.save_current_month():
+                    self.save_checkpoint(
+                        self.current_month_dates[-1] if self.current_month_dates else self.current_month
+                    )
+                    processed_months.add(month_key)
+            prob_ds.close()
+            gc.collect()
+
+    def save_checkpoint(self, current_date: date):
+        category_results = {}
+        for category, dates in self.class_dict.items():
+            category_dates = [d for d in dates if d in self.processed_dates]
+            category_results[category] = category_dates
+        self.checkpoint.save_checkpoint(
+            current_date=current_date,
+            current_month=self.current_month.strftime("%Y-%m") if self.current_month else None,
+            completed_dates=self.processed_dates,
+            category_results=category_results,
+            metadata={
+                'variogram_params_loaded': list(self.variogram_params.keys()),
+                'transformers_loaded': list(self.transformers.keys()),
+                'processed_count': len(self.processed_dates),
+                'failed_count': len(self.failed_dates),
+                'current_month_size': len(self.current_month_dates)
+            }
+        )
+
+    def run(self):
+        self.logger.info("=" * 80)
+        self.logger.info("HISTORICAL MAGNITUDE RECONSTRUCTION PIPELINE (MONTHLY SAVING) - WITH IM_PRODUCT")
+        self.logger.info("=" * 80)
+        try:
+            self.load_all_data()
+            self.prepare_transformers()
+            checkpoint_data = self.checkpoint.load_checkpoint()
+            if checkpoint_data:
+                self.processed_dates = checkpoint_data['completed_dates']
+                start_date = checkpoint_data['current_date']
+                current_month = checkpoint_data.get('current_month')
+                if current_month:
+                    year, month = map(int, current_month.split('-'))
+                    self.current_month = date(year, month, 1)
+                self.logger.info(f"Resuming from checkpoint: {start_date}")
+                self.logger.info(f"Resuming from month: {current_month}")
+                self.logger.info(f"Already processed: {len(self.processed_dates)} days")
+                self.process_monthly()
+            else:
+                self.logger.info("Starting fresh processing")
+                self.process_monthly()
+            all_dates = []
+            for dates in self.class_dict.values():
+                all_dates.extend(dates)
+            all_dates = sorted(set(all_dates))
+            processing_info = {
+                'start_date': min(self.processed_dates).isoformat() if self.processed_dates else None,
+                'end_date': max(self.processed_dates).isoformat() if self.processed_dates else None,
+                'total_days': len(all_dates),
+                'successful_days': len(self.processed_dates),
+                'failed_days': len(self.failed_dates)
+            }
+            model_metadata = {}
+            for category, params in self.variogram_params.items():
+                model_metadata[category] = {
+                    'range': params.get('range'),
+                    'sill': params.get('sill'),
+                    'nugget': params.get('nugget'),
+                    'nu': params.get('nu'),
+                    'variogram_model': params.get('variogram_model', 'Matern')
+                }
+            quality_flags = {
+                'days_with_insufficient_stations': len(self.failed_dates),
+                'min_stations_per_day': self.daily_df.groupby('day').size().min() if not self.daily_df.empty else 0,
+                'max_stations_per_day': self.daily_df.groupby('day').size().max() if not self.daily_df.empty else 0,
+                'avg_stations_per_day': self.daily_df.groupby('day').size().mean() if not self.daily_df.empty else 0,
+                'categories_with_transformers': len(self.transformers)
+            }
+            self.output_handler.save_metadata(processing_info, model_metadata, quality_flags)
+            self.checkpoint.clear_checkpoint()
+            self.logger.info("=" * 80)
+            self.logger.info("MAGNITUDE RECONSTRUCTION COMPLETED SUCCESSFULLY")
+            self.logger.info(f"Processed: {len(self.processed_dates)} days")
+            self.logger.info(f"Failed: {len(self.failed_dates)} days")
+            self.logger.info(f"Success rate: {len(self.processed_dates)/len(all_dates)*100:.1f}%" if all_dates else "N/A")
+            self.logger.info("=" * 80)
+        except Exception as e:
+            self.logger.error(f"Pipeline failed: {e}")
+            self.logger.error(traceback.format_exc())
+            if hasattr(self, 'processed_dates') and self.processed_dates:
+                last_date = max(self.processed_dates) if self.processed_dates else None
+                if last_date:
+                    category_results = {}
+                    for category, dates in self.class_dict.items():
+                        category_dates = [d for d in dates if d in self.processed_dates]
+                        category_results[category] = category_dates
+                    self.checkpoint.save_checkpoint(
+                        current_date=last_date,
+                        current_month=self.current_month.strftime("%Y-%m") if self.current_month else None,
+                        completed_dates=self.processed_dates,
+                        category_results=category_results,
+                        metadata={
+                            'processed_count': len(self.processed_dates),
+                            'failed_count': len(self.failed_dates),
+                            'error': str(e)
+                        }
+                    )
+            raise
+
+def main():
+    config = Config()
+    pipeline = HistoricalMagnitudeReconstructionPipeline(config)
+    pipeline.run()
+
+if __name__ == "__main__":
+    main()
