@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# Data and outputs
+data/
+outputs/
+logs/
+checkpoints/
+transformers/
+progress_tracking/
+*.nc
+*.pkl
+*.pickle
+*.xlsx
+*.csv
+*.log
+*.png
+*.html
+
+# OS
+.DS_Store
+Thumbs.db
