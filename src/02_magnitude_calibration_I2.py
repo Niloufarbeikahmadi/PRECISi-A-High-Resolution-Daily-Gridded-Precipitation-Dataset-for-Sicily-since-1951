@@ -41,10 +41,10 @@ def load_progress(workflow_type: str, category: str) -> Dict:
                 data = json.load(f)
             if "completed_days" in data:
                 data["completed_days"] = [date.fromisoformat(d) for d in data["completed_days"]]
-            print(f"  ✓ Loaded progress: {len(data.get('completed_days', []))} days completed")
+            print(f"  Loaded progress: {len(data.get('completed_days', []))} days completed")
             return data
         except Exception as e:
-            print(f"  ⚠ Error loading progress file: {e}. Starting fresh.")
+            print(f"  Error loading progress file: {e}. Starting fresh.")
     return {"completed_days": [], "current_category": None}
 
 def save_progress(workflow_type: str, category: str, completed_days: List[date]):
@@ -61,7 +61,7 @@ def save_progress(workflow_type: str, category: str, completed_days: List[date])
     try:
         with open(progress_file, 'w') as f:
             json.dump(progress_data, f, indent=2)
-        print(f"  💾 Progress saved: {len(completed_days)} days completed")
+        print(f"  Progress saved: {len(completed_days)} days completed")
     except Exception as e:
         warnings.warn(f"Could not save progress: {e}")
 
@@ -76,17 +76,17 @@ def cleanup_progress(workflow_type: str, category: str):
     if os.path.exists(progress_file):
         try:
             os.remove(progress_file)
-            print(f"  🧹 Cleaned up progress file for {category}")
+            print(f"  Cleaned up progress file for {category}")
         except Exception as e:
             warnings.warn(f"Could not remove progress file: {e}")
 
 def recover_interrupted_run(workflow_type="OK"):
     progress_dir = ensure_progress_dir()
-    print(f"\n🔍 Recovery Status for {workflow_type}:")
+    print(f"\nRecovery Status for {workflow_type}:")
     print("=" * 50)
     progress_files = [f for f in os.listdir(progress_dir) if f.startswith(f"progress_{workflow_type}")]
     if not progress_files:
-        print("✅ No interrupted runs found.")
+        print("No interrupted runs found.")
         return
     for progress_file in progress_files:
         category = progress_file.replace(f"progress_{workflow_type}_", "").replace(".json", "")
@@ -95,13 +95,13 @@ def recover_interrupted_run(workflow_type="OK"):
                 data = json.load(f)
             completed = len(data.get('completed_days', []))
             timestamp = data.get('timestamp', 'Unknown')
-            print(f"📁 {category}:")
+            print(f"{category}:")
             print(f"   Completed: {completed} days")
             print(f"   Last save: {timestamp}")
             print(f"   File: {progress_file}")
             print()
         except Exception as e:
-            print(f"❌ Error reading {progress_file}: {e}")
+            print(f"Error reading {progress_file}: {e}")
 
 def _matern_variogram_function(params, dist):
     nugget, psill, range_val, nu = params
@@ -237,7 +237,7 @@ def adaptive_transformation(data: np.ndarray, diagnostics: Dict) -> Tuple[Option
             indices = np.linspace(0, n_samples-1, sample_size, dtype=int)
             _, p_val = shapiro(transformed_data[indices])
         create_transformation_plots(data, transformed_data, category_name, p_val, fig_dir)
-        print(f"  ✓ Quantile transformation complete: n_quantiles={n_quantiles}, p-value={p_val:.4f}")
+        print(f"  Quantile transformation complete: n_quantiles={n_quantiles}, p-value={p_val:.4f}")
         return transformer, 'quantile'
     except Exception as e:
         warnings.warn(f"Quantile transformation failed for {category_name}: {e}")
@@ -279,7 +279,7 @@ def create_transformation_plots(raw_data: np.ndarray, transformed_data: np.ndarr
     filename = f"{save_dir}/transformation_{category.replace('/', '_')}.png"
     plt.savefig(filename, dpi=300, bbox_inches='tight')
     plt.close()
-    print(f"  ✓ Saved transformation plot: {filename}")
+    print(f"  Saved transformation plot: {filename}")
 
 def get_adaptive_variogram_bounds(category_name: str, diagnostics: Dict,
                                   bin_centers: np.ndarray, gamma: np.ndarray) -> Dict:
@@ -532,30 +532,30 @@ def enhanced_model_reporting(category: str, diagnostics: Dict,
                              cv_scores: Dict, variogram_params: Dict,
                              trans_name: str) -> str:
     report = f"""
-    ╔{'═'*78}╗
-    ║ CATEGORY: {category:<66} ║
-    ╠{'═'*78}╣
-    ║ DATA QUALITY METRICS                   Transformation: {trans_name:<19} ║
-    ║   • Total Days: {diagnostics['total_days']:<28} • Mean Rainfall: {diagnostics['value_statistics'].get('mean', 0):<6.2f} mm    ║
-    ║   • Avg Stations/Day: {diagnostics['avg_stations']:<22.2f} • CV: {diagnostics['value_statistics'].get('cv', 0):<12.2f}        ║
-    ║   • Days with <3 stations: {diagnostics['days_with_lt_3_stations']:<19} • Total Wet Points: {diagnostics['value_statistics'].get('count', 0):<6}   ║
-    ╠{'═'*78}╣
-    ║ VARIOGRAM PARAMETERS (Matern)                                            ║
-    ║   • Length Scale: {variogram_params.get('range', 0):<26.0f} m • Sill: {variogram_params.get('sill', 0):<11.4f}      ║
-    ║   • Nugget: {variogram_params.get('nugget', 0):<30.4f} • Nu: {variogram_params.get('nu', 'N/A'):<13.4f}     ║
-    ╠{'═'*78}╣
-    ║ CROSS-VALIDATION SCORES                                                  ║
-    ║   • S1 (bias): {cv_scores.get('s1', 0):<29.4f} • KGE: {cv_scores.get('kge', 0):<14.4f}       ║
-    ║   • S2 (variance): {cv_scores.get('s2', 0):<25.4f} • Correlation: {cv_scores.get('corr', 0):<6.4f}    ║
-    ║   • RMSE: {cv_scores.get('rmse', 0):<32.2f} mm • Rel. Bias: {cv_scores.get('rel_bias', 0):<9.2f} %     ║
-    ╠{'═'*78}╣
-    ║ RECOMMENDATIONS & FLAGS                                                  ║
+    {'='*78}
+    CATEGORY: {category:<66}
+    {'='*78}
+    DATA QUALITY METRICS                   Transformation: {trans_name:<19}
+      - Total Days: {diagnostics['total_days']:<28} - Mean Rainfall: {diagnostics['value_statistics'].get('mean', 0):<6.2f} mm
+      - Avg Stations/Day: {diagnostics['avg_stations']:<22.2f} - CV: {diagnostics['value_statistics'].get('cv', 0):<12.2f}
+      - Days with <3 stations: {diagnostics['days_with_lt_3_stations']:<19} - Total Wet Points: {diagnostics['value_statistics'].get('count', 0):<6}
+    {'='*78}
+    VARIOGRAM PARAMETERS (Matern)
+      - Length Scale: {variogram_params.get('range', 0):<26.0f} m - Sill: {variogram_params.get('sill', 0):<11.4f}
+      - Nugget: {variogram_params.get('nugget', 0):<30.4f} - Nu: {variogram_params.get('nu', 'N/A'):<13.4f}
+    {'='*78}
+    CROSS-VALIDATION SCORES
+      - S1 (bias): {cv_scores.get('s1', 0):<29.4f} - KGE: {cv_scores.get('kge', 0):<14.4f}
+      - S2 (variance): {cv_scores.get('s2', 0):<25.4f} - Correlation: {cv_scores.get('corr', 0):<6.4f}
+      - RMSE: {cv_scores.get('rmse', 0):<32.2f} mm - Rel. Bias: {cv_scores.get('rel_bias', 0):<9.2f} %
+    {'='*78}
+    RECOMMENDATIONS & FLAGS
     """
     if not diagnostics['recommendations']:
-        report += "    ║   ✓ No major flags detected.                                             ║\n"
+        report += "      No major flags detected.\n"
     for rec in diagnostics['recommendations']:
-        report += f"    ║   ⚠ {rec:<72} ║\n"
-    report += f"    ╚{'═'*78}╝"
+        report += f"      [warn] {rec}\n"
+    report += f"    {'='*78}"
     print(report)
     return report
 
@@ -568,7 +568,7 @@ def conditional_kriging_magnitude_ok(
     wet_mask = (binary_map == 1)
     sub = df[(df["day"] == day) & (df["Rain"] > 0)]
     if len(sub) < 5:
-        print(f"  ⚠ Day {day}: Only {len(sub)} wet stations - using direct assignment")
+        print(f"  Day {day}: Only {len(sub)} wet stations - using direct assignment")
         result_grid[wet_mask] = 0
         XX, YY = np.meshgrid(grid_x, grid_y, indexing='xy')
         for _, station in sub.iterrows():
@@ -713,43 +713,43 @@ def run_workflow_matern_enhanced(daily_df, final_group_days, occurrence, dem=Non
     bin_edges = np.unique(np.concatenate((bins1, bins2, bins3, bins4, bins5)))
     bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
     for category, days in final_group_days.items():
-        print(f"\n{'—'*70}")
+        print(f"\n{'-'*70}")
         print(f"Processing category: {category} ({len(days)} days)")
-        print(f"{'—'*70}")
+        print(f"{'-'*70}")
         if not days:
-            print(f"  ⚠ Empty category {category} - skipping")
+            print(f"  Empty category {category} - skipping")
             continue
         kriged_magnitude_category = {}
         progress = load_progress(workflow_type, category)
         completed_days = progress.get("completed_days", [])
         remaining_days = [d for d in days if d not in completed_days]
         if not remaining_days and completed_days:
-            print(f"  ✅ Category {category} already completed. Loading results...")
+            print(f"  Category {category} already completed. Loading results...")
             try:
                 ds_cat = xr.open_dataset(os.path.join(save_path, f"magnitude_{category}.nc"))
                 for t in ds_cat.time.values:
                     day = pd.to_datetime(t).date()
                     kriged_magnitude_all[day] = ds_cat['rainfall_magnitude'].sel(time=t).values
-                print(f"  ✅ Loaded {len(ds_cat.time)} previously kriged days.")
+                print(f"  Loaded {len(ds_cat.time)} previously kriged days.")
                 continue
             except FileNotFoundError:
-                print(f"  ⚠ NetCDF file not found for {category}. Re-running...")
+                print(f"  NetCDF file not found for {category}. Re-running...")
                 remaining_days = days
                 completed_days = []
             except Exception as e:
-                print(f"  ⚠ Error loading {category} NetCDF: {e}. Re-running...")
+                print(f"  Error loading {category} NetCDF: {e}. Re-running...")
                 remaining_days = days
                 completed_days = []
         if not remaining_days and not completed_days:
-            print(f"  ⚠ No days found for category {category}. Skipping.")
+            print(f"  No days found for category {category}. Skipping.")
             continue
         elif not remaining_days and completed_days:
             continue
-        print(f"  📊 Resume status: {len(completed_days)} days done, {len(remaining_days)} days remaining")
+        print(f"  Resume status: {len(completed_days)} days done, {len(remaining_days)} days remaining")
         save_progress(workflow_type, category, completed_days)
         cat_df_raw = daily_df[(daily_df['day'].isin(days)) & (daily_df['Rain'] > 0)].copy()
         if cat_df_raw.empty:
-            print(f"  ⚠ No data found for category {category} - skipping")
+            print(f"  No data found for category {category} - skipping")
             continue
         diagnostics = diagnose_category_quality(cat_df_raw, days, category)
         special_action = handle_problematic_categories(category, diagnostics)
@@ -817,7 +817,7 @@ def run_workflow_matern_enhanced(daily_df, final_group_days, occurrence, dem=Non
             )
             report = enhanced_model_reporting(category, diagnostics_clean, cv_scores, model_params, trans_name)
             save_enhanced_report(report, category, workflow_type, save_path)
-            print(f"  🗺️ Kriging {len(remaining_days)} remaining days...")
+            print(f"  Kriging {len(remaining_days)} remaining days...")
             pbar_krig = tqdm(remaining_days, desc=f"  Kriging ({category})", unit="day")
             for i, day in enumerate(pbar_krig):
                 try:
@@ -842,48 +842,48 @@ def run_workflow_matern_enhanced(daily_df, final_group_days, occurrence, dem=Non
                                 ds_temp = create_magnitude_dataset(kriged_magnitude_category, grid_x, grid_y)
                                 temp_file = os.path.join(save_path, f"magnitude_{category}_TEMP.nc")
                                 ds_temp.to_netcdf(temp_file)
-                                print(f"  💾 Saved temporary results ({len(kriged_magnitude_category)} days)")
+                                print(f"  Saved temporary results ({len(kriged_magnitude_category)} days)")
                             except Exception as e:
-                                print(f"  ⚠ Could not save temp file: {e}")
+                                print(f"  Could not save temp file: {e}")
                 except Exception as e:
-                    print(f"  ❌ Error on {day}: {e}")
+                    print(f"  Error on {day}: {e}")
                     save_progress(workflow_type, category, completed_days)
                     continue
             if kriged_magnitude_category:
                 ds_cat = create_magnitude_dataset(kriged_magnitude_category, grid_x, grid_y)
                 ds_cat.to_netcdf(os.path.join(save_path, f"magnitude_{category}th0loocv.nc"))
-                print(f"  ✅ Saved final results: magnitude_{category}.nc")
+                print(f"  Saved final results: magnitude_{category}.nc")
                 kriged_magnitude_all.update(kriged_magnitude_category)
                 cleanup_progress(workflow_type, category)
                 temp_file = os.path.join(save_path, f"magnitude_{category}_TEMP.nc")
                 if os.path.exists(temp_file):
                     try:
                         os.remove(temp_file)
-                        print(f"  🧹 Removed temporary file")
+                        print(f"  Removed temporary file")
                     except:
                         pass
         except Exception as e:
-            warnings.warn(f"💥 FATAL ERROR for category {category}: {e}")
-            print(f"  💾 Progress saved. Resume will continue from here.")
+            warnings.warn(f"FATAL ERROR for category {category}: {e}")
+            print(f"  Progress saved. Resume will continue from here.")
         gc.collect()
     print(f"\n--- Saving final combined {workflow_type} results ---")
     if kriged_magnitude_all:
         magnitude_ds = create_magnitude_dataset(kriged_magnitude_all, grid_x, grid_y)
         final_filename = f"rainfall_magnitude_{workflow_type}_30.11.2025.nc"
         magnitude_ds.to_netcdf(final_filename)
-        print(f"✅ Final combined dataset saved to {final_filename}")
+        print(f"Final combined dataset saved to {final_filename}")
     else:
-        print("❌ No kriged data was generated in this run.")
+        print("No kriged data was generated in this run.")
 
 if __name__ == '__main__':
-    print("🧪 Testing progress system...")
+    print("Testing progress system...")
     test_date = date(2023, 1, 1)
     save_progress("TEST", "TEST_CATEGORY", [test_date])
     progress_data = load_progress("TEST", "TEST_CATEGORY")
     print(f"Progress test: {len(progress_data['completed_days'])} days loaded")
     cleanup_progress("TEST", "TEST_CATEGORY")
-    print("✅ Progress system working correctly\n")
-    print("🔍 Checking for interrupted runs...")
+    print("Progress system working correctly\n")
+    print("Checking for interrupted runs...")
     recover_interrupted_run("OK")
     recover_interrupted_run("EDK")
     print()
