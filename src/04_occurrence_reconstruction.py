@@ -29,7 +29,7 @@ class Config:
     log_dir: Path = Path("logs")
     historical_data_path: Path = Path("combined_dataset.pkl")
     class_dict_path: Path = Path("class_dict_ALL.pkl")
-    occ_models_path: Path = Path("class_info_27.11.2025.pkl")
+    occ_models_path: Path = Path("class_info.pkl")
     metadata_path: Path = Path("merged_rainfall_metadata.csv")
     dem_path: Path = Path("dem.nc")
     trace_threshold: float = 0.0
@@ -338,7 +338,7 @@ class OutputHandler:
             "history": f"Created {datetime.now():%Y-%m-%d %H:%M:%S}",
             "conventions": "CF-1.8",
             "reference": "Conditional two-phase rainfall modeling approach",
-            "contact": "Your Contact",
+            "contact": "Niloufar.beikahmadi@gmail.com",
             "version": "1.0",
             "calendar": "standard",
             "year_month": year_month,
