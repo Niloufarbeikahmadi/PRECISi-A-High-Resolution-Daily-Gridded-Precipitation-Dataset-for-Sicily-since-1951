@@ -173,9 +173,9 @@ def fit_variogram_models(bin_centers: np.ndarray, gamma: np.ndarray,
                               weights=np.ones_like(bin_centers), 
                               loss="linear")
             fitted_models[model_name] = model
-            logger.info(f"  ✓ {model_name} fitted for {class_label}")
+            logger.info(f"  {model_name} fitted for {class_label}")
         except Exception as e:
-            logger.warning(f"  ✗ {model_name} fitting failed for {class_label}: {e}")
+            logger.warning(f"  {model_name} fitting failed for {class_label}: {e}")
     return fitted_models
 def daily_loocv(daily_df: pd.DataFrame, days: List, model_name: str, 
                 model_params: dict, class_label: str) -> Dict[str, float]:
