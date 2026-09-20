@@ -8,10 +8,10 @@ The scripts expect the following inputs to be provided locally by the user:
 - Station metadata with UTM Zone 33N coordinates and elevation (`merged_rainfall_metadata.csv`).
 - A day classification dictionary mapping each calendar day to a hydrometeorological regime (`final_group_days_ALL.pkl`).
 - A summary of calibrated magnitude variogram parameters per regime (`variogram_parameters_summary.csv`).
-- A dictionary of calibrated occurrence models per intermittency class (`class_info_27.11.2025.pkl`).
+- A dictionary of calibrated occurrence models per intermittency class (`class_info.pkl`).
 - A digital elevation model on the 2 km target grid (`dem.nc`).
 - Monthly benchmark precipitation totals for validation (`monthly_rainfall.xlsx`).
-- Resampled benchmark monthly grids (`MONTHLY_ALTLAS/resampled/P_mens_YYYY_MM.nc`).
+- Resampled benchmark monthly grids (`P_mens_YYYY_MM.nc`).
 
 ## Output data
 
