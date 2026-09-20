@@ -150,7 +150,7 @@ def diagnose_category_quality(category_df: pd.DataFrame, days: List[date],
         'recommendations': []
     }
     for day in days:
-        day_data = category_df[(category_df['day'] == day) & (category_df['Rain'] >= 0)]
+        day_data = category_df[(category_df['day'] == day) & (category_df['Rain'] >= 0.2)]
         n_stations = len(day_data)
         diagnostics['stations_per_day'].append(n_stations)
         if n_stations >= 2:
@@ -824,7 +824,7 @@ def create_IM_product_from_file(workflow_type: str, occurrence_ds: xr.Dataset,
     print(f"Creating I*M product dataset for {workflow_type} workflow")
     print(f"{'='*60}")
     magnitude_file = os.path.join(base_path, f'{workflow_type}_enhanced12', 
-                                 'rainfall_magnitude_OK_12.2.2026.nc')
+                                 'rainfall_magnitude.nc')
     if not os.path.exists(magnitude_file):
         print(f"❌ Magnitude file not found: {magnitude_file}")
         return
@@ -1041,11 +1041,11 @@ if __name__ == '__main__':
 
 if __name__ == '__main__':
     base_path = r'outputs/phase2_calibration'
-    enhanced_path = r'outputs/phase2_results/OK_enhanced3/'
+    enhanced_path = r'outputs/phase2_results/OK_enhanced/'
     shapefile_path = r"data/ancillary/sicily.shp"
-    daily_df_path = r"data/input/daily_df_m.pkl"
+    daily_df_path = r"data/input/daily_df.pkl"
     ok_cv_path = os.path.join(base_path, 'rainfall_magnitude_OK.nc')
-    ok_enhanced_path = os.path.join(enhanced_path, 'rainfall_magnitude_OK_24.11.2025.nc')
+    ok_enhanced_path = os.path.join(enhanced_path, 'rainfall_magnitude.nc')
     print("Loading data...")
     daily_df = pd.read_pickle(daily_df_path)
     ds_old_model = xr.open_dataset(ok_cv_path)
